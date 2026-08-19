@@ -19,48 +19,108 @@ import { HiOutlineSpeakerphone } from 'react-icons/hi';
 
 import SEO from '../shared/components/SEO';
 import DashboardLayout from '../shared/components/DashboardLayout';
-import ApproveModal from '../shared/components/ApproveModal';
 import AddJobLinkModal from '../shared/components/AddJobLinkModal';
 import { createClient } from '../lib/supabase/client';
+
+// ─── Mock data import (replace with API call when backend is ready) ──────────
+// Backend: GET /api/applications
+
+async function getAccessToken() {
+  const supabase = createClient();
+
+  if (!supabase) {
+    throw new Error('The Supabase connection is unavailable.');
+  }
+
+  const {
+    data: { session },
+    error,
+  } = await supabase.auth.getSession();
+
+  if (error || !session?.access_token) {
+    throw new Error(
+      'Your session has expired. Please sign in again.'
+    );
+  }
+
+  return session.access_token;
+}
+
+function formatApplicationDate(value) {
+  if (!value) return '—';
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return '—';
+  }
+
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
 
 export default function Dashboard() {
   const router = useRouter();
 
   const previewClientId =
     router.isReady
-      ? Array.isArray(
-          router.query.previewClientId
-        )
-        ? router.query
-            .previewClientId[0]
-        : router.query
-            .previewClientId || ''
+      ? Array.isArray(router.query.previewClientId)
+        ? router.query.previewClientId[0]
+        : router.query.previewClientId || ''
       : '';
 
   const [applications, setApplications] = useState([]);
-  const [
-    applicationSummary,
-    setApplicationSummary,
-  ] = useState({
+  const [applicationSummary, setApplicationSummary] = useState({
     totalApplications: 0,
     persistedApplications: 0,
     historicalApplications: 0,
   });
-  const [isLoadingApplications, setIsLoadingApplications] = useState(false);
+  const [isLoadingApplications, setIsLoadingApplications] = useState(true);
   const [applicationsError, setApplicationsError] = useState('');
   const [activeFilter, setActiveFilter] = useState('All');
-  const [selectedApp, setSelectedApp] = useState(null);
-  const [isApproveModalOpen, setIsApproveModalOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const [isAddJobModalOpen, setIsAddJobModalOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [updateSlideIndex, setUpdateSlideIndex] = useState(0);
+  const [announcements, setAnnouncements] = useState([]);
+  const [isLoadingAnnouncements, setIsLoadingAnnouncements] = useState(true);
+  const [announcementsError, setAnnouncementsError] = useState('');
 
   useEffect(() => {
+    if (!router.isReady) {
+      return;
+    }
+
+    const searchParam =
+      Array.isArray(router.query.search)
+        ? router.query.search[0]
+        : router.query.search;
+
+    if (typeof searchParam === 'string') {
+      setSearchQuery(searchParam);
+    }
+  }, [
+    router.isReady,
+    router.query.search,
+  ]);
+
+  useEffect(() => {
+    if (announcements.length <= 1) {
+      setUpdateSlideIndex(0);
+      return undefined;
+    }
+
     const timer = setInterval(() => {
-      setUpdateSlideIndex((prev) => (prev + 1) % 3);
+      setUpdateSlideIndex(
+        (prev) => (prev + 1) % announcements.length
+      );
     }, 4000);
+
     return () => clearInterval(timer);
-  }, []);
+  }, [announcements.length]);
 
   useEffect(() => {
     if (!router.isReady) {
@@ -74,78 +134,70 @@ export default function Dashboard() {
       setApplicationsError('');
 
       try {
-        const supabase = createClient();
-
-        if (!supabase) {
-          throw new Error(
-            'The Supabase connection is unavailable.'
-          );
-        }
-
-        const {
-          data: { session },
-          error: sessionError,
-        } = await supabase.auth.getSession();
-
-        if (
-          sessionError ||
-          !session?.access_token
-        ) {
-          throw new Error(
-            'Your session has expired. Please sign in again.'
-          );
-        }
+        const accessToken = await getAccessToken();
 
         const query = previewClientId
-          ? `?clientId=${encodeURIComponent(
-              previewClientId
-            )}`
+          ? `?clientId=${encodeURIComponent(previewClientId)}`
           : '';
 
         const response = await fetch(
           `/api/applications${query}`,
           {
             headers: {
-              Authorization:
-                `Bearer ${session.access_token}`,
+              Authorization: `Bearer ${accessToken}`,
             },
           }
         );
 
-        const result = await response
+        const data = await response
           .json()
           .catch(() => ({}));
 
         if (!response.ok) {
           throw new Error(
-            result.error ||
-              'Applications could not be loaded.'
+            data.error ||
+              'Unable to load your applications.'
           );
         }
 
         const applicationRows =
-          (result.applications || []).map(
-            (application) => ({
-              ...application,
-              status:
-                application.dashboardStatus ||
-                'Pending',
-            })
-          );
+          (Array.isArray(data.applications)
+            ? data.applications
+            : []
+          ).map((application) => ({
+            ...application,
+            resumeName:
+              application.resumeName ||
+              (
+                application.resume &&
+                application.resume !== 'N/A'
+                  ? application.resume
+                  : null
+              ),
+            coverLetterName:
+              application.coverLetterName ||
+              (
+                application.coverLetter &&
+                application.coverLetter !== 'N/A'
+                  ? application.coverLetter
+                  : null
+              ),
+            jobUrl:
+              application.jobUrl ||
+              application.jobLink ||
+              '',
+          }));
 
         if (!cancelled) {
-          setApplications(
-            applicationRows
-          );
+          setApplications(applicationRows);
 
           setApplicationSummary(
-            result.summary || {
+            data.summary || {
               totalApplications:
                 applicationRows.length,
               persistedApplications:
                 applicationRows.length,
-              historicalApplications:
-                0,
+              historicalApplications: 0,
             }
           );
         }
@@ -157,16 +209,15 @@ export default function Dashboard() {
             persistedApplications: 0,
             historicalApplications: 0,
           });
+
           setApplicationsError(
-            error?.message ||
-              'Applications could not be loaded.'
+            error.message ||
+              'Unable to load your applications.'
           );
         }
       } finally {
         if (!cancelled) {
-          setIsLoadingApplications(
-            false
-          );
+          setIsLoadingApplications(false);
         }
       }
     };
@@ -181,19 +232,82 @@ export default function Dashboard() {
     router.isReady,
   ]);
 
-  // Status Badge styles helper
+  useEffect(() => {
+    if (previewClientId) {
+      setAnnouncements([]);
+      setAnnouncementsError('');
+      setIsLoadingAnnouncements(false);
+
+      return undefined;
+    }
+
+    let mounted = true;
+
+    const loadAnnouncements = async () => {
+      setIsLoadingAnnouncements(true);
+      setAnnouncementsError('');
+
+      try {
+        const accessToken = await getAccessToken();
+
+        const response = await fetch(
+          '/api/client/announcements',
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+            },
+          }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            data.error ||
+              'Unable to load important updates.'
+          );
+        }
+
+        if (!mounted) return;
+
+        setAnnouncements(
+          Array.isArray(data.announcements)
+            ? data.announcements
+            : []
+        );
+      } catch (error) {
+        if (mounted) {
+          setAnnouncementsError(
+            error.message ||
+              'Unable to load important updates.'
+          );
+        }
+      } finally {
+        if (mounted) {
+          setIsLoadingAnnouncements(false);
+        }
+      }
+    };
+
+    loadAnnouncements();
+
+    return () => {
+      mounted = false;
+    };
+  }, [previewClientId]);
+
   const getStatusBadge = (status) => {
     switch (status) {
-      case 'Interview':
+      case 'Interview Scheduled':
         return (
           <span className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 border border-blue-100 dark:border-blue-900/50">
-            Interview
+            Interview Scheduled
           </span>
         );
-      case 'Offered':
+      case 'Offer Received':
         return (
           <span className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400 border border-green-100 dark:border-green-900/50">
-            Offered
+            Offer Received
           </span>
         );
       case 'Rejected':
@@ -202,45 +316,87 @@ export default function Dashboard() {
             Rejected
           </span>
         );
-      case 'Pending':
-      default:
+      case 'Waiting':
         return (
           <span className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400 border border-amber-100 dark:border-amber-900/50">
-            Pending
+            Waiting
+          </span>
+        );
+      case 'Submitted':
+      default:
+        return (
+          <span className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-gray-50 text-gray-600 dark:bg-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600">
+            Submitted
           </span>
         );
     }
   };
 
-  // Filter application list
-  const filteredApps = applications.filter(app => {
-    if (activeFilter === 'All') return true;
-    return app.status === activeFilter;
-  });
+  const normalizedSearch =
+    searchQuery.trim().toLowerCase();
 
-  // Reset pagination whenever the user changes dashboard sections.
-  // This prevents a page-2 selection from carrying into a section with only one page.
+  const filteredApps = applications.filter(
+    (app) => {
+      const matchesStatus =
+        activeFilter === 'All' ||
+        app.status === activeFilter;
+
+      if (!matchesStatus) {
+        return false;
+      }
+
+      if (!normalizedSearch) {
+        return true;
+      }
+
+      const searchableValues = [
+        app.number,
+        app.company,
+        app.position,
+        app.role,
+        app.status,
+        app.location,
+        app.linkSource,
+      ];
+
+      return searchableValues.some(
+        (value) =>
+          String(value || '')
+            .toLowerCase()
+            .includes(normalizedSearch)
+      );
+    }
+  );
+
   useEffect(() => {
     setCurrentPage(1);
-  }, [activeFilter]);
+  }, [activeFilter, searchQuery]);
 
-  // Calculate stats count dynamically
-  const totalCount =
+  const totalCount = Math.max(
+    applications.length,
     Number(
-      applicationSummary
-        .totalApplications || 0
-    );
-  const pendingCount = applications.filter(app => app.status === 'Pending').length;
-  const rejectedCount = applications.filter(app => app.status === 'Rejected').length;
-  const interviewCount = applications.filter(app => app.status === 'Interview').length;
-  const offeredCount = applications.filter(app => app.status === 'Offered').length;
+      applicationSummary.totalApplications || 0
+    )
+  );
+  const waitingCount = applications.filter(
+    app => app.status === 'Waiting'
+  ).length;
+  const rejectedCount = applications.filter(
+    app => app.status === 'Rejected'
+  ).length;
+  const interviewCount = applications.filter(
+    app => app.status === 'Interview Scheduled'
+  ).length;
+  const offeredCount = applications.filter(
+    app => app.status === 'Offer Received'
+  ).length;
 
   const stats = [
     { label: 'TOTAL APPLICATIONS', count: totalCount, filterKey: 'All', icon: FiFileText, color: 'text-blue-600 bg-blue-50 dark:bg-blue-900/20' },
-    { label: 'PENDING RESPONSES', count: pendingCount, filterKey: 'Pending', icon: FiMail, color: 'text-amber-500 bg-amber-50 dark:bg-amber-900/20' },
+    { label: 'PENDING RESPONSES', count: waitingCount, filterKey: 'Waiting', icon: FiMail, color: 'text-amber-500 bg-amber-50 dark:bg-amber-900/20' },
     { label: 'REJECTED ROLES', count: rejectedCount, filterKey: 'Rejected', icon: FiUserX, color: 'text-red-500 bg-red-50 dark:bg-red-900/20' },
-    { label: 'UPCOMING INTERVIEWS', count: interviewCount, filterKey: 'Interview', icon: FiCalendar, color: 'text-sky-500 bg-sky-50 dark:bg-sky-900/20' },
-    { label: 'FEEDBACKS', count: offeredCount, filterKey: 'Offered', icon: FiMessageSquare, color: 'text-green-500 bg-green-50 dark:bg-green-900/20' }
+    { label: 'UPCOMING INTERVIEWS', count: interviewCount, filterKey: 'Interview Scheduled', icon: FiCalendar, color: 'text-sky-500 bg-sky-50 dark:bg-sky-900/20' },
+    { label: 'OFFERS RECEIVED', count: offeredCount, filterKey: 'Offer Received', icon: FiMessageSquare, color: 'text-green-500 bg-green-50 dark:bg-green-900/20' }
   ];
 
   // Pagination config
@@ -255,21 +411,12 @@ export default function Dashboard() {
     if (currentPage > totalPages) setCurrentPage(totalPages);
   }, [currentPage, totalPages]);
 
-  // Action: Approve Application
-  // TODO(Backend): Replace with applyLoopApi.applications.approve(selectedApp.id)
-  const handleApprove = () => {
-    if (selectedApp) {
-      setApplications(prev => prev.map(app =>
-        app.id === selectedApp.id
-          ? { ...app, status: 'Offered' }
-          : app
-      ));
-      setSelectedApp(null);
-    }
-  };
 
   return (
-    <DashboardLayout>
+    <DashboardLayout
+      searchValue={searchQuery}
+      onSearchChange={setSearchQuery}
+    >
       <SEO title="Home" />
 
       {/* Stat Cards Container */}
@@ -310,36 +457,96 @@ export default function Dashboard() {
           <div className="bg-[#1E50C3] p-3 rounded-xl flex items-center justify-center shrink-0">
             <HiOutlineSpeakerphone className="text-white w-6 h-6" />
           </div>
+
           <div>
-            <h2 className="text-lg font-bold text-gray-950 dark:text-white">Important Updates</h2>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Latest news and announcements</p>
+            <h2 className="text-lg font-bold text-gray-950 dark:text-white">
+              Important Updates
+            </h2>
+
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+              Latest news and announcements
+            </p>
           </div>
         </div>
 
-        <div className="border border-gray-100 dark:border-gray-700 rounded-xl p-5 md:p-6 mb-4">
-          <div className="flex items-start gap-3">
-            <span className="w-2 h-2 rounded-full bg-[#1E50C3] shrink-0 mt-1.5" />
-            <div className="flex flex-col gap-1.5">
-              <h3 className="text-sm md:text-base font-bold text-gray-800 dark:text-gray-200">Loop Lab Enhanced</h3>
-              <p className="text-xs md:text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
-                New interview scenarios added! Practice with company-specific questions from Google, Meta, Amazon, and more.
-              </p>
-              <span className="text-[11px] text-gray-400 dark:text-gray-500 mt-1">Feb 18, 2026.</span>
+        {isLoadingAnnouncements ? (
+          <div className="border border-gray-100 dark:border-gray-700 rounded-xl py-10 flex flex-col items-center justify-center gap-3">
+            <div className="w-7 h-7 rounded-full border-2 border-blue-100 border-t-[#1E50C3] animate-spin" />
+
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              Loading updates...
+            </span>
+          </div>
+        ) : announcementsError ? (
+          <div className="border border-gray-100 dark:border-gray-700 rounded-xl py-10 text-center">
+            <p className="text-sm text-red-600 dark:text-red-400">
+              Unable to load updates.
+            </p>
+          </div>
+        ) : announcements.length === 0 ? (
+          <div className="border border-gray-100 dark:border-gray-700 rounded-xl py-10 text-center">
+            <p className="text-sm text-gray-400 dark:text-gray-500">
+              No updates available.
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className="border border-gray-100 dark:border-gray-700 rounded-xl p-5 md:p-6">
+              <div className="flex items-start gap-3">
+                <span className="w-2 h-2 rounded-full bg-[#1E50C3] shrink-0 mt-1.5" />
+
+                <div className="flex flex-col gap-1.5">
+                  <h3 className="text-sm md:text-base font-bold text-gray-800 dark:text-gray-200">
+                    {announcements[updateSlideIndex]?.title}
+                  </h3>
+
+                  <p className="text-xs md:text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
+                    {announcements[updateSlideIndex]?.message}
+                  </p>
+
+                  <span className="text-[11px] text-gray-400 dark:text-gray-500 mt-1">
+                    {announcements[updateSlideIndex]?.published_at
+                      ? new Date(
+                          announcements[
+                            updateSlideIndex
+                          ].published_at
+                        ).toLocaleDateString(
+                          'en-US',
+                          {
+                            month: 'short',
+                            day: 'numeric',
+                            year: 'numeric',
+                          }
+                        )
+                      : ''}
+                  </span>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
 
-        {/* Carousel Indicators */}
-        <div className="flex justify-center items-center gap-2 mt-4">
-          {[0, 1, 2].map((idx) => (
-            <span 
-              key={idx}
-              className={`w-2 h-2 rounded-full transition-colors ${
-                updateSlideIndex === idx ? 'bg-[#1E50C3]' : 'bg-blue-200 dark:bg-blue-900'
-              }`}
-            />
-          ))}
-        </div>
+            {announcements.length > 1 && (
+              <div className="flex justify-center items-center gap-2 mt-4">
+                {announcements.map(
+                  (announcement, idx) => (
+                    <button
+                      key={announcement.id}
+                      type="button"
+                      onClick={() =>
+                        setUpdateSlideIndex(idx)
+                      }
+                      aria-label={`Show update ${idx + 1}`}
+                      className={`w-2 h-2 rounded-full transition-colors ${
+                        updateSlideIndex === idx
+                          ? 'bg-[#1E50C3]'
+                          : 'bg-blue-200 dark:bg-blue-900'
+                      }`}
+                    />
+                  )
+                )}
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       {/* Interactive Updates / Action Bar */}
@@ -369,7 +576,35 @@ export default function Dashboard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-              {paginatedApps.length > 0 ? (
+              {isLoadingApplications ? (
+                <tr>
+                  <td
+                    colSpan={7}
+                    className="px-6 py-14 text-center"
+                  >
+                    <div className="flex flex-col items-center gap-3">
+                      <div className="w-8 h-8 rounded-full border-2 border-blue-100 border-t-[#1E50C3] animate-spin" />
+                      <span className="text-sm text-gray-500 dark:text-gray-400">
+                        Loading your applications...
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+              ) : applicationsError ? (
+                <tr>
+                  <td
+                    colSpan={7}
+                    className="px-6 py-14 text-center"
+                  >
+                    <p className="text-sm font-semibold text-red-600 dark:text-red-400">
+                      We could not load your applications.
+                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                      {applicationsError}
+                    </p>
+                  </td>
+                </tr>
+              ) : paginatedApps.length > 0 ? (
                 paginatedApps.map((app) => (
                   <tr 
                     key={app.id}
@@ -379,31 +614,22 @@ export default function Dashboard() {
                       {app.number}
                     </td>
                     <td className="px-3 py-3 sm:px-6 sm:py-4.5">
-                      <span className="whitespace-nowrap">{app.date}</span>
+                      <span className="whitespace-nowrap">
+                        {formatApplicationDate(app.appliedAt)}
+                      </span>
                     </td>
                     <td className="px-3 py-3 sm:px-6 sm:py-4.5 font-semibold text-gray-900 dark:text-white">
-                      {app.isLocal ? (
-                        <span
-                          title="This Job Link has not been persisted as an Application."
-                          className="block text-gray-700 dark:text-gray-300"
-                        >
-                          {app.company}
-                        </span>
-                      ) : (
-                        <Link
-                          href={{
-                            pathname: `/applications/${app.id}`,
-                            query: previewClientId
-                              ? {
-                                  previewClientId,
-                                }
-                              : {},
-                          }}
-                          className="hover:text-[#1E50C3] hover:underline transition-colors block"
-                        >
-                          {app.company}
-                        </Link>
-                      )}
+                      <Link
+                        href={{
+                          pathname: `/applications/${app.id}`,
+                          query: previewClientId
+                            ? { previewClientId }
+                            : {},
+                        }}
+                        className="hover:text-[#1E50C3] hover:underline transition-colors block"
+                      >
+                        {app.company}
+                      </Link>
                     </td>
                     <td className="px-3 py-3 sm:px-6 sm:py-4.5 hidden sm:table-cell">
                       {app.position}
@@ -411,14 +637,18 @@ export default function Dashboard() {
                     <td className="px-3 py-3 sm:px-6 sm:py-4.5 font-medium text-gray-600 dark:text-gray-400 hidden sm:table-cell">
                       <div className="flex items-center gap-1.5 hover:text-primary cursor-pointer transition-colors">
                         <FiFile className="text-red-500 w-4 h-4 shrink-0" />
-                        <span className="truncate max-w-[120px]">{app.resume}</span>
+                        <span className="truncate max-w-[120px]">
+                          {app.resumeName || 'N/A'}
+                        </span>
                       </div>
                     </td>
                     <td className="px-3 py-3 sm:px-6 sm:py-4.5 font-medium text-gray-600 dark:text-gray-400 hidden md:table-cell">
-                      {app.coverLetter !== 'N/A' ? (
+                      {app.coverLetterName ? (
                         <div className="flex items-center gap-1.5 hover:text-primary cursor-pointer transition-colors">
                           <FiFile className="text-red-500 w-4 h-4 shrink-0" />
-                          <span className="truncate max-w-[120px]">{app.coverLetter}</span>
+                          <span className="truncate max-w-[120px]">
+                            {app.coverLetterName}
+                          </span>
                         </div>
                       ) : (
                         <span className="text-gray-400 dark:text-gray-500 italic">N/A</span>
@@ -434,10 +664,7 @@ export default function Dashboard() {
               ) : (
                 <tr>
                   <td colSpan={7} className="px-6 py-12 text-center text-gray-400 dark:text-gray-500">
-                    {isLoadingApplications
-                      ? 'Loading Applications...'
-                      : applicationsError ||
-                        `No applications found matching status "${activeFilter}".`}
+                    No records found.
                   </td>
                 </tr>
               )}
@@ -485,34 +712,46 @@ export default function Dashboard() {
       </div>
 
       {/* Modal Integration */}
-      <ApproveModal 
-        isOpen={isApproveModalOpen}
-        onClose={() => setIsApproveModalOpen(false)}
-        onConfirm={handleApprove}
-      />
 
       <AddJobLinkModal
         isOpen={isAddJobModalOpen}
         onClose={() => setIsAddJobModalOpen(false)}
-        onConfirm={(data) => {
-          // TODO(Backend): Replace with applyLoopApi.applications.create(data)
-          // Security: Validate URL format, sanitize comment text
-          const newId = `AND${Date.now()}`;
-          const newApp = {
-            id: newId,
-            isLocal: true,
-            number: `#${newId}`,
-            date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-            company: 'New Company',
-            position: 'Role',
-            resume: 'Anderson Pdf.',
-            coverLetter: 'Anderson..',
-            status: 'Pending',
-            jobLink: data.jobLink,
-            feedback: data.comment || '',
-          };
-          setApplications([newApp, ...applications]);
-          setCurrentPage(1); // Jump to first page to show new entry
+        onConfirm={async ({ jobLink, comment }) => {
+          if (previewClientId) {
+            throw new Error(
+              'Job links cannot be submitted while previewing a client.'
+            );
+          }
+
+          const accessToken =
+            await getAccessToken();
+
+          const response = await fetch(
+            '/api/client/job-requests',
+            {
+              method: 'POST',
+              headers: {
+                Authorization:
+                  `Bearer ${accessToken}`,
+                'Content-Type':
+                  'application/json',
+              },
+              body: JSON.stringify({
+                jobLink,
+                comment,
+              }),
+            }
+          );
+
+          const data =
+            await response.json();
+
+          if (!response.ok) {
+            throw new Error(
+              data.error ||
+                'Unable to submit your job link.'
+            );
+          }
         }}
       />
     </DashboardLayout>

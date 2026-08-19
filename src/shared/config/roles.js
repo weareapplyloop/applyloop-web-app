@@ -52,7 +52,8 @@ export const ROLE_FROM_SLUG = Object.fromEntries(
 );
 
 export const getRoleHome = (role) => {
-  if (!role || role === USER_ROLES.USER_CLIENT) return '/dashboard';
+  if (role === USER_ROLES.USER_CLIENT) return '/onboarding';
+  if (!role) return '/dashboard';
   return `/${ROLE_SLUGS[role] || 'dashboard'}`;
 };
 

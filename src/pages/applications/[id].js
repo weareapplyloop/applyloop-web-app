@@ -1,7 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
-import DashboardLayout from '../../shared/components/DashboardLayout';
 import {
   FiRefreshCw,
   FiBriefcase,
@@ -10,355 +9,576 @@ import {
   FiStar,
   FiLink,
   FiX,
+  FiMessageSquare,
+  FiFileText,
+  FiCheck,
 } from 'react-icons/fi';
+
+import DashboardLayout from '../../shared/components/DashboardLayout';
 import ApproveModal from '../../shared/components/ApproveModal';
 import { createClient } from '../../lib/supabase/client';
 
-// ════════════════════════════════════════════════════════════════════════════════
-// FEEDBACK HISTORY PANEL — Slide-in side panel
-// Backend: GET /api/applications/:id/feedback (list)
-// Backend: POST /api/applications/:id/feedback (send message)
-// ════════════════════════════════════════════════════════════════════════════════
+async function getAccessToken() {
+  const supabase = createClient();
 
-function FeedbackPanel({
-  onClose,
-  feedback,
-}) {
-  return (
-    <div
-      className="bg-white rounded-2xl shadow-xl flex flex-col overflow-hidden border border-gray-100 animate-slideInRight"
-      style={{
-        width: '320px',
-        minHeight: '480px',
-      }}
-    >
-      <div className="flex justify-end p-4">
-        <button
-          onClick={onClose}
-          className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200 transition-colors"
-        >
-          <FiX className="w-3.5 h-3.5" />
-        </button>
-      </div>
+  if (!supabase) {
+    throw new Error(
+      'The Supabase connection is unavailable.'
+    );
+  }
 
-      <div className="px-5 pb-4">
-        <h3 className="text-xl font-bold text-gray-900">
-          Feedback History
-        </h3>
-      </div>
+  const {
+    data: { session },
+    error,
+  } = await supabase.auth.getSession();
 
-      <div className="flex-1 mx-4 mb-4 bg-[#FFF9C4] rounded-2xl p-5">
-        {feedback ? (
-          <p className="text-sm text-gray-700 leading-relaxed">
-            {feedback}
-          </p>
-        ) : (
-          <p className="text-sm text-gray-500">
-            No feedback has been recorded for this Application.
-          </p>
-        )}
-      </div>
-    </div>
-  );
+  if (error || !session?.access_token) {
+    throw new Error(
+      'Your session has expired. Please sign in again.'
+    );
+  }
+
+  return session.access_token;
 }
 
-const preferenceColors = [
-  'text-purple-700 bg-purple-50 border border-purple-200',
-  'text-orange-600 bg-orange-50 border border-orange-200',
-  'text-orange-500 bg-orange-50 border border-orange-200',
-];
+function formatDate(value) {
+  if (!value) return 'N/A';
 
-function normalizePreference(
-  preference,
-  index
-) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return 'N/A';
+  }
+
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+function formatTime(value) {
+  if (!value) return 'N/A';
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return 'N/A';
+  }
+
+  return date.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function getStatusStyle(status) {
+  switch (status) {
+    case 'Interview Scheduled':
+      return 'bg-blue-50 text-blue-600 border-blue-100';
+
+    case 'Offer Received':
+      return 'bg-green-50 text-green-600 border-green-100';
+
+    case 'Rejected':
+      return 'bg-red-50 text-red-600 border-red-100';
+
+    case 'Waiting':
+      return 'bg-amber-50 text-amber-600 border-amber-100';
+
+    case 'Submitted':
+    default:
+      return 'bg-gray-50 text-gray-600 border-gray-200';
+  }
+}
+
+function normalizePreference(preference) {
   if (
     preference &&
     typeof preference === 'object'
   ) {
-    return {
-      label:
-        preference.label || '',
-      color:
-        preference.color ||
-        preferenceColors[
-          index %
-            preferenceColors.length
-        ],
-    };
+    return (
+      preference.label ||
+      preference.name ||
+      preference.value ||
+      ''
+    );
   }
 
-  return {
-    label:
-      String(
-        preference || ''
-      ),
-    color:
-      preferenceColors[
-        index %
-          preferenceColors.length
-      ],
+  return String(preference || '');
+}
+
+function FeedbackPanel({
+  messages,
+  onClose,
+  onSend,
+  readOnly = false,
+}) {
+  const [message, setMessage] =
+    useState('');
+  const [isSending, setIsSending] =
+    useState(false);
+  const [error, setError] =
+    useState('');
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+
+    const trimmed = message.trim();
+
+    if (!trimmed || isSending) {
+      return;
+    }
+
+    setIsSending(true);
+    setError('');
+
+    try {
+      await onSend(trimmed);
+      setMessage('');
+    } catch (sendError) {
+      setError(
+        sendError.message ||
+          'Unable to send feedback.'
+      );
+    } finally {
+      setIsSending(false);
+    }
   };
-}
 
-function formatApplicationDate(
-  value
-) {
-  if (!value) {
-    return '';
-  }
+  return (
+    <div
+      className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl flex flex-col overflow-hidden border border-gray-100 dark:border-gray-700 animate-slideInRight"
+      style={{
+        width: '320px',
+        minHeight: '400px',
+      }}
+    >
+      <div className="flex items-center justify-between p-5 border-b border-gray-100 dark:border-gray-700">
+        <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+          Feedback History
+        </h3>
 
-  const date = new Date(value);
+        <button
+          type="button"
+          onClick={onClose}
+          className="w-8 h-8 rounded-full bg-gray-100 dark:bg-gray-700 flex items-center justify-center text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+          aria-label="Close feedback history"
+        >
+          <FiX className="w-4 h-4" />
+        </button>
+      </div>
 
-  if (
-    Number.isNaN(
-      date.getTime()
-    )
-  ) {
-    return '';
-  }
+      <div className="flex-1 p-5 overflow-y-auto">
+        {messages.length === 0 ? (
+          <div className="h-full min-h-[260px] flex flex-col items-center justify-center text-center">
+            <FiMessageSquare className="w-7 h-7 text-gray-300 mb-3" />
 
-  return date.toLocaleDateString(
-    'en-US',
-    {
-      month: 'long',
-      day: 'numeric',
-      year: 'numeric',
-    }
+            <p className="text-sm text-gray-400 dark:text-gray-500">
+              No feedback yet.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-5">
+            {messages.map((message) => (
+              <div
+                key={message.id}
+                className="border-b border-gray-100 dark:border-gray-700 pb-4 last:border-0"
+              >
+                {message.subject && (
+                  <p className="text-sm font-bold text-gray-900 dark:text-white mb-1">
+                    {message.subject}
+                  </p>
+                )}
+
+                <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">
+                  {message.message}
+                </p>
+
+                <div className="flex items-center justify-between mt-3 gap-3">
+                  <span className="text-xs text-gray-400">
+                    {message.sender?.name ||
+                      'ApplyLoop'}
+                  </span>
+
+                  <span className="text-xs text-gray-400">
+                    {formatDate(
+                      message.createdAt
+                    )}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {!readOnly && (
+      <form
+        onSubmit={handleSubmit}
+        className="p-4 border-t border-gray-100 dark:border-gray-700"
+      >
+        {error && (
+          <p className="text-xs text-red-600 dark:text-red-400 mb-2">
+            {error}
+          </p>
+        )}
+
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={message}
+            onChange={(event) =>
+              setMessage(event.target.value)
+            }
+            disabled={isSending}
+            maxLength={5000}
+            placeholder="Type a message..."
+            className="flex-1 min-w-0 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 outline-none focus:ring-2 focus:ring-[#1E50C3] focus:border-transparent disabled:opacity-60"
+          />
+
+          <button
+            type="submit"
+            disabled={
+              !message.trim() ||
+              isSending
+            }
+            className="px-4 py-2.5 text-sm font-semibold text-white bg-[#1E50C3] hover:bg-[#1A45A7] rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isSending
+              ? 'Sending...'
+              : 'Send'}
+          </button>
+        </div>
+      </form>
+      )}
+    </div>
   );
 }
 
-function formatApplicationTime(
-  value
-) {
-  if (!value) {
-    return '';
-  }
+function DocumentCard({
+  name,
+  label,
+}) {
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <div className="w-[110px] h-[135px] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-sm flex flex-col items-center justify-center">
+        <div className="bg-red-600 text-white text-[10px] font-bold px-2 py-1 rounded">
+          PDF
+        </div>
 
-  const date = new Date(value);
+        <FiFileText className="w-8 h-8 text-gray-300 mt-4" />
+      </div>
 
-  if (
-    Number.isNaN(
-      date.getTime()
-    )
-  ) {
-    return '';
-  }
-
-  return date.toLocaleTimeString(
-    'en-US',
-    {
-      hour: 'numeric',
-      minute: '2-digit',
-    }
+      <p className="text-xs text-gray-600 dark:text-gray-400 text-center max-w-[130px] break-words">
+        {name || label}
+      </p>
+    </div>
   );
 }
-
-function getExternalHref(value) {
-  const link =
-    String(value || '').trim();
-
-  if (!link) {
-    return '#';
-  }
-
-  if (
-    /^https?:\/\//i.test(link)
-  ) {
-    return link;
-  }
-
-  return `https://${link}`;
-}
-
-// ════════════════════════════════════════════════════════════════════════════════
-// MAIN PAGE — Job Application Detail
-// Backend: GET /api/applications/:id
-// ════════════════════════════════════════════════════════════════════════════════
 
 export default function ApplicationDetailPage() {
   const router = useRouter();
-  const [app, setApp] = useState(null);
-  const [isLoadingApplication, setIsLoadingApplication] = useState(true);
-  const [applicationError, setApplicationError] = useState('');
-  const [showFeedback, setShowFeedback] = useState(false);
-  const [isApproveModalOpen, setIsApproveModalOpen] = useState(false);
+
+  const applicationId =
+    router.isReady
+      ? Array.isArray(router.query.id)
+        ? router.query.id[0]
+        : router.query.id || ''
+      : '';
+
+  const previewClientId =
+    router.isReady
+      ? Array.isArray(
+          router.query.previewClientId
+        )
+        ? router.query.previewClientId[0]
+        : router.query.previewClientId || ''
+      : '';
+
+  const isClientPreview =
+    Boolean(previewClientId);
+
+  const dashboardHref =
+    isClientPreview
+      ? {
+          pathname: '/dashboard',
+          query: {
+            previewClientId,
+          },
+        }
+      : '/dashboard';
+
+  const [application, setApplication] =
+    useState(null);
+  const [messages, setMessages] =
+    useState([]);
+  const [
+    isLoadingApplication,
+    setIsLoadingApplication,
+  ] = useState(true);
+  const [
+    applicationError,
+    setApplicationError,
+  ] = useState('');
+  const [showFeedback, setShowFeedback] =
+    useState(false);
+  const [
+    isApproveModalOpen,
+    setIsApproveModalOpen,
+  ] = useState(false);
+  const [isApproving, setIsApproving] =
+    useState(false);
+  const [approvalError, setApprovalError] =
+    useState('');
 
   useEffect(() => {
-    if (!router.isReady) {
+    if (
+      !router.isReady ||
+      !applicationId
+    ) {
       return undefined;
     }
 
-    const applicationId =
-      Array.isArray(router.query.id)
-        ? router.query.id[0]
-        : router.query.id;
+    let mounted = true;
 
-    if (!applicationId) {
-      return undefined;
-    }
+    const loadApplication = async () => {
+      setIsLoadingApplication(true);
+      setApplicationError('');
 
-    const previewClientId =
-      Array.isArray(
-        router.query.previewClientId
-      )
-        ? router.query
-            .previewClientId[0]
-        : router.query
-            .previewClientId ||
-          '';
+      try {
+        const accessToken =
+          await getAccessToken();
 
-    let cancelled = false;
-
-    const loadApplication =
-      async () => {
-        setIsLoadingApplication(
-          true
-        );
-        setApplicationError('');
-
-        try {
-          const supabase =
-            createClient();
-
-          if (!supabase) {
-            throw new Error(
-              'The Supabase connection is unavailable.'
-            );
-          }
-
-          const {
-            data: { session },
-            error: sessionError,
-          } =
-            await supabase.auth.getSession();
-
-          if (
-            sessionError ||
-            !session?.access_token
-          ) {
-            throw new Error(
-              'Your session has expired. Please sign in again.'
-            );
-          }
-
-          const query =
-            previewClientId
-              ? `?previewClientId=${encodeURIComponent(
-                  previewClientId
-                )}`
-              : '';
-
-          const response =
-            await fetch(
-              `/api/applications/${encodeURIComponent(
+        const endpoint =
+          isClientPreview
+            ? `/api/applications/${encodeURIComponent(
                 applicationId
-              )}${query}`,
-              {
-                headers: {
-                  Authorization:
-                    `Bearer ${session.access_token}`,
-                },
-              }
-            );
+              )}?previewClientId=${encodeURIComponent(
+                previewClientId
+              )}`
+            : `/api/client/applications/${encodeURIComponent(
+                applicationId
+              )}`;
 
-          const result =
-            await response
-              .json()
-              .catch(() => ({}));
-
-          if (!response.ok) {
-            throw new Error(
-              result.error ||
-                'The Application could not be loaded.'
-            );
+        const response = await fetch(
+          endpoint,
+          {
+            headers: {
+              Authorization:
+                `Bearer ${accessToken}`,
+            },
           }
+        );
 
-          const application =
-            result.application;
+        const data = await response
+          .json()
+          .catch(() => ({}));
 
-          if (!application) {
-            throw new Error(
-              'The Application could not be found.'
-            );
-          }
-
-          const normalized = {
-            ...application,
-            date:
-              formatApplicationDate(
-                application.appliedAt
-              ),
-            applicationTime:
-              formatApplicationTime(
-                application.appliedAt
-              ),
-            preferences:
-              (
-                application.preferences ||
-                []
-              ).map(
-                normalizePreference
-              ),
-            jobDetails:
-              Array.isArray(
-                application.jobDetails
-              )
-                ? application.jobDetails
-                : [],
-            qualities:
-              Array.isArray(
-                application.qualities
-              )
-                ? application.qualities
-                : [],
-            otherDetails:
-              Array.isArray(
-                application.otherDetails
-              )
-                ? application.otherDetails
-                : [],
-          };
-
-          if (!cancelled) {
-            setApp(normalized);
-          }
-        } catch (error) {
-          if (!cancelled) {
-            setApp(null);
-            setApplicationError(
-              error?.message ||
-                'The Application could not be loaded.'
-            );
-          }
-        } finally {
-          if (!cancelled) {
-            setIsLoadingApplication(
-              false
-            );
-          }
+        if (!response.ok) {
+          throw new Error(
+            data.error ||
+              'Unable to load this application.'
+          );
         }
-      };
+
+        if (!mounted) {
+          return;
+        }
+
+        const loadedApplication =
+          data.application || null;
+
+        const normalizedApplication =
+          loadedApplication
+            ? {
+                ...loadedApplication,
+                number:
+                  loadedApplication.number ||
+                  `#${String(
+                    loadedApplication.id ||
+                      applicationId
+                  )
+                    .slice(0, 8)
+                    .toUpperCase()}`,
+                jobUrl:
+                  loadedApplication.jobUrl ||
+                  loadedApplication.jobLink ||
+                  '',
+              }
+            : null;
+
+        setApplication(
+          normalizedApplication
+        );
+
+        if (
+          Array.isArray(data.messages)
+        ) {
+          setMessages(data.messages);
+        } else if (
+          loadedApplication?.feedback
+        ) {
+          setMessages([
+            {
+              id:
+                `preview-feedback-${applicationId}`,
+              message:
+                loadedApplication.feedback,
+              sender: {
+                name: 'ApplyLoop',
+              },
+              createdAt:
+                loadedApplication.updatedAt ||
+                loadedApplication.createdAt ||
+                loadedApplication.appliedAt ||
+                null,
+            },
+          ]);
+        } else {
+          setMessages([]);
+        }
+      } catch (error) {
+        if (mounted) {
+          setApplication(null);
+          setMessages([]);
+
+          setApplicationError(
+            error.message ||
+              'Unable to load this application.'
+          );
+        }
+      } finally {
+        if (mounted) {
+          setIsLoadingApplication(false);
+        }
+      }
+    };
 
     loadApplication();
 
     return () => {
-      cancelled = true;
+      mounted = false;
     };
   }, [
+    applicationId,
+    isClientPreview,
+    previewClientId,
     router.isReady,
-    router.query.id,
-    router.query.previewClientId,
   ]);
 
-  if (
-    isLoadingApplication
-  ) {
+  const handleSendFeedback =
+    async (message) => {
+      if (isClientPreview) {
+        throw new Error(
+          'Feedback cannot be sent while previewing a client.'
+        );
+      }
+
+      const accessToken =
+        await getAccessToken();
+
+      const response = await fetch(
+        `/api/client/applications/${application.id}/feedback`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization:
+              `Bearer ${accessToken}`,
+            'Content-Type':
+              'application/json',
+          },
+          body: JSON.stringify({
+            message,
+          }),
+        }
+      );
+
+      const data =
+        await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.error ||
+            'Unable to send feedback.'
+        );
+      }
+
+      if (data.message) {
+        setMessages((current) => [
+          ...current,
+          data.message,
+        ]);
+      }
+    };
+
+  const handleApproveApplication =
+    async () => {
+      if (
+        !application ||
+        isApproving ||
+        isClientPreview
+      ) {
+        return;
+      }
+
+      setIsApproving(true);
+      setApprovalError('');
+
+      try {
+        const accessToken =
+          await getAccessToken();
+
+        const response = await fetch(
+          `/api/client/applications/${application.id}/approve`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization:
+                `Bearer ${accessToken}`,
+            },
+          }
+        );
+
+        const data =
+          await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            data.error ||
+              'Unable to approve this application.'
+          );
+        }
+
+        setApplication((current) => ({
+          ...current,
+          clientApprovalStatus:
+            data.approval?.status ||
+            'approved',
+          clientApprovedAt:
+            data.approval?.approvedAt ||
+            new Date().toISOString(),
+        }));
+
+        setIsApproveModalOpen(false);
+      } catch (error) {
+        setApprovalError(
+          error.message ||
+            'Unable to approve this application.'
+        );
+      } finally {
+        setIsApproving(false);
+      }
+    };
+
+  if (isLoadingApplication) {
     return (
       <DashboardLayout>
-        <div className="flex min-h-[420px] items-center justify-center">
-          <p className="text-sm font-medium text-gray-500">
-            Loading Application...
+        <div className="min-h-[420px] flex flex-col items-center justify-center gap-3">
+          <div className="w-9 h-9 rounded-full border-2 border-blue-100 border-t-[#1E50C3] animate-spin" />
+
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Loading application...
           </p>
         </div>
       </DashboardLayout>
@@ -367,256 +587,322 @@ export default function ApplicationDetailPage() {
 
   if (
     applicationError ||
-    !app
+    !application
   ) {
     return (
       <DashboardLayout>
-        <div className="flex min-h-[420px] items-center justify-center px-5">
-          <div className="max-w-lg rounded-2xl border border-red-200 bg-white p-6 text-center">
-            <h2 className="font-bold text-gray-900">
+        <div className="min-h-[420px] flex items-center justify-center">
+          <div className="max-w-md text-center bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-8">
+            <h1 className="text-lg font-bold text-gray-900 dark:text-white">
               Application unavailable
-            </h2>
-            <p className="mt-2 text-sm text-gray-600">
+            </h1>
+
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
               {applicationError ||
-                'The Application could not be loaded.'}
+                'Application not found.'}
             </p>
+
+            <button
+              type="button"
+              onClick={() =>
+                router.push(dashboardHref)
+              }
+              className="mt-6 px-5 py-2.5 bg-[#1E50C3] text-white text-sm font-semibold rounded-xl hover:bg-[#1A45A7] transition-colors"
+            >
+              Back to Dashboard
+            </button>
           </div>
         </div>
       </DashboardLayout>
     );
   }
 
+  const preferences = Array.isArray(
+    application.preferences
+  )
+    ? application.preferences
+        .map(normalizePreference)
+        .filter(Boolean)
+    : [];
+
+  const hasDocuments =
+    Boolean(application.resumeName) ||
+    Boolean(application.coverLetterName);
+
   return (
     <>
       <Head>
-        <title>Job Application ({app.company}) | ApplyLoop</title>
-        <meta name="description" content={`Job application for ${app.role} at ${app.company}`} />
+        <title>
+          {application.position} at{' '}
+          {application.company} | ApplyLoop
+        </title>
+
+        <meta
+          name="description"
+          content={`Application for ${application.position} at ${application.company}`}
+        />
       </Head>
 
       <DashboardLayout>
-        <div className="max-w-3xl relative">
-          {/* ═══════════════════════════════════════════════════════════════════
-           *  SINGLE WHITE CARD — Contains info table, buttons, PDFs
-           *  Matches Figma: info rows left, buttons right, PDFs below divider
-           * ═══════════════════════════════════════════════════════════════════ */}
-          <div className="bg-white border border-gray-100 rounded-2xl px-6 sm:px-8 py-6 mb-6">
+        <div className="max-w-5xl">
+          <div className="mb-6">
+            <button
+              type="button"
+              onClick={() =>
+                router.push(dashboardHref)
+              }
+              className="text-sm font-semibold text-[#1E50C3] hover:text-[#1A45A7] transition-colors"
+            >
+              Back to applications
+            </button>
+          </div>
 
-            {/* ── Top section: Info rows (left) + Buttons (right) ── */}
-            <div className="flex flex-col sm:flex-row gap-4 sm:gap-6 justify-between">
+          <div className="flex flex-col lg:flex-row gap-6 items-start">
+            <div className="flex-1 w-full bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl px-6 sm:px-8 py-6 shadow-sm">
+              <div className="mb-6">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                  {application.number}
+                </p>
 
-              {/* Left side: Info rows */}
-              {/* Backend: All fields from GET /api/applications/:id response */}
-              <div className="flex-1 divide-y divide-gray-100 min-w-0">
+                <h1 className="text-xl sm:text-2xl font-bold text-gray-950 dark:text-white mt-1">
+                  {application.company}
+                </h1>
 
-                {/* Status */}
-                <div className="flex items-center py-2 sm:py-3 gap-2 sm:gap-6">
-                  <div className="flex items-center gap-1 sm:gap-2 w-24 sm:w-44 text-[10px] sm:text-sm text-gray-500 shrink-0">
-                    <FiRefreshCw className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  {application.position}
+                </p>
+              </div>
+
+              <div className="divide-y divide-gray-100 dark:divide-gray-700">
+                <div className="flex items-center py-3 gap-6">
+                  <div className="flex items-center gap-2 w-44 text-sm text-gray-500 shrink-0">
+                    <FiRefreshCw />
                     Status
                   </div>
-                  {/* Backend: status field — possible values: Pending, Interview, Offered, Rejected */}
-                  <span className="px-2 py-0.5 sm:px-3 sm:py-1 rounded-md text-[9px] sm:text-xs font-semibold bg-yellow-100 text-yellow-700 border border-yellow-200">
-                    {app.status}
+
+                  <span
+                    className={`px-3 py-1 rounded-md text-xs font-semibold border ${getStatusStyle(
+                      application.status
+                    )}`}
+                  >
+                    {application.status}
                   </span>
                 </div>
 
-                {/* Role */}
-                <div className="flex items-center py-2 sm:py-3 gap-2 sm:gap-6">
-                  <div className="flex items-center gap-1 sm:gap-2 w-24 sm:w-44 text-[10px] sm:text-sm text-gray-500 shrink-0">
-                    <FiBriefcase className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
+                <div className="flex items-center py-3 gap-6">
+                  <div className="flex items-center gap-2 w-44 text-sm text-gray-500 shrink-0">
+                    <FiBriefcase />
                     Role
                   </div>
-                  <span className="text-[10px] sm:text-sm text-gray-800 break-words">{app.role}</span>
+
+                  <span className="text-sm text-gray-800 dark:text-gray-200">
+                    {application.role ||
+                      application.position}
+                  </span>
                 </div>
 
-                {/* Dates */}
-                <div className="flex items-center py-2 sm:py-3 gap-2 sm:gap-6">
-                  <div className="flex items-center gap-1 sm:gap-2 w-24 sm:w-44 text-[10px] sm:text-sm text-gray-500 shrink-0">
-                    <FiCalendar className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
-                    Dates
+                <div className="flex items-center py-3 gap-6">
+                  <div className="flex items-center gap-2 w-44 text-sm text-gray-500 shrink-0">
+                    <FiCalendar />
+                    Date
                   </div>
-                  <span className="text-[10px] sm:text-sm text-gray-800 break-words">{app.date}</span>
+
+                  <span className="text-sm text-gray-800 dark:text-gray-200">
+                    {formatDate(
+                      application.appliedAt
+                    )}
+                  </span>
                 </div>
 
-                {/* Application Time */}
-                <div className="flex items-center py-2 sm:py-3 gap-2 sm:gap-6">
-                  <div className="flex items-center gap-1 sm:gap-2 w-24 sm:w-44 text-[10px] sm:text-sm text-gray-500 shrink-0">
-                    <FiClock className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
+                <div className="flex items-center py-3 gap-6">
+                  <div className="flex items-center gap-2 w-44 text-sm text-gray-500 shrink-0">
+                    <FiClock />
                     Application Time
                   </div>
-                  <span className="text-[10px] sm:text-sm text-gray-800 break-words">{app.applicationTime}</span>
+
+                  <span className="text-sm text-gray-800 dark:text-gray-200">
+                    {formatTime(
+                      application.appliedAt
+                    )}
+                  </span>
                 </div>
 
-                {/* Preferences */}
-                <div className="flex items-center py-2 sm:py-3 gap-2 sm:gap-6">
-                  <div className="flex items-center gap-1 sm:gap-2 w-24 sm:w-44 text-[10px] sm:text-sm text-gray-500 shrink-0">
-                    <FiStar className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
+                <div className="flex items-start py-3 gap-6">
+                  <div className="flex items-center gap-2 w-44 text-sm text-gray-500 shrink-0">
+                    <FiStar />
                     Preferences
                   </div>
-                  {/* Backend: preferences array — each item: { label, color } */}
-                  <div className="flex flex-wrap gap-1 sm:gap-2">
-                    {app.preferences.map((p) => (
-                      <span
-                        key={p.label}
-                        className={`px-1.5 py-0.5 sm:px-3 sm:py-1 rounded-md text-[8px] sm:text-xs font-semibold ${p.color} whitespace-nowrap`}
-                      >
-                        {p.label}
+
+                  <div className="flex flex-wrap gap-2">
+                    {preferences.length > 0 ? (
+                      preferences.map(
+                        (preference) => (
+                          <span
+                            key={preference}
+                            className="px-3 py-1 rounded-md text-xs font-semibold bg-blue-50 text-blue-600 border border-blue-100"
+                          >
+                            {preference}
+                          </span>
+                        )
+                      )
+                    ) : (
+                      <span className="text-sm text-gray-400">
+                        N/A
                       </span>
-                    ))}
+                    )}
                   </div>
                 </div>
 
-                {/* Job Link */}
-                <div className="flex items-center py-2 sm:py-3 gap-2 sm:gap-6">
-                  <div className="flex items-center gap-1 sm:gap-2 w-24 sm:w-44 text-[10px] sm:text-sm text-gray-500 shrink-0">
-                    <FiLink className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
+                <div className="flex items-start py-3 gap-6">
+                  <div className="flex items-center gap-2 w-44 text-sm text-gray-500 shrink-0">
+                    <FiLink />
                     Job Link
                   </div>
-                  {/* Security: Validate URL format on backend, use rel="noopener noreferrer" */}
-                  <a
-                    href={getExternalHref(app.jobLink)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[10px] sm:text-sm text-[#1E50C3] hover:underline break-words whitespace-normal break-all block w-full"
-                  >
-                    {app.jobLink || 'Not supplied'}
-                  </a>
+
+                  {application.jobUrl ? (
+                    <a
+                      href={
+                        application.jobUrl
+                      }
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm text-[#1E50C3] hover:underline break-all"
+                    >
+                      {application.jobUrl}
+                    </a>
+                  ) : (
+                    <span className="text-sm text-gray-400">
+                      N/A
+                    </span>
+                  )}
                 </div>
               </div>
 
-              {/* Right side: Action buttons OR Feedback History panel */}
-              {/* Backend: PUT /api/applications/:id/approve */}
-              {/* Backend: Opens feedback panel for POST /api/applications/:id/feedback */}
-              {!showFeedback ? (
-                <div className="flex flex-row items-end justify-end gap-1 sm:gap-3 shrink-0 transition-opacity duration-300">
+              <div className="flex flex-wrap justify-end gap-3 mt-6">
+                {isClientPreview ? (
                   <button
-                    onClick={() => setIsApproveModalOpen(true)}
-                    className="px-2 py-1.5 sm:px-5 sm:py-2.5 rounded-md sm:rounded-xl bg-[#1E50C3] text-white text-[9px] sm:text-sm font-semibold hover:bg-[#1A45A7] transition-colors whitespace-nowrap"
+                    type="button"
+                    onClick={() =>
+                      setShowFeedback(true)
+                    }
+                    className="px-5 py-2.5 rounded-xl border border-[#1E50C3] text-[#1E50C3] text-sm font-semibold hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
                   >
-                    Approve Application
+                    View Feedback
                   </button>
-                  <button
-                    onClick={() => setShowFeedback(true)}
-                    className="px-2 py-1.5 sm:px-5 sm:py-2.5 rounded-md sm:rounded-xl border border-[#1E50C3] text-[#1E50C3] text-[9px] sm:text-sm font-semibold hover:bg-blue-50 transition-colors whitespace-nowrap"
-                  >
-                    Send Feedback
-                  </button>
-                </div>
-              ) : (
-                <div className="shrink-0 scale-75 sm:scale-100 origin-right">
-                  <FeedbackPanel
-                    onClose={() => setShowFeedback(false)}
-                    feedback={app.feedback}
-                  />
-                </div>
-              )}
-            </div>
+                ) : (
+                  <>
+                    {application.clientApprovalStatus ===
+                    'approved' ? (
+                      <button
+                        type="button"
+                        disabled
+                        className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-green-50 text-green-600 border border-green-100 text-sm font-semibold cursor-default"
+                      >
+                        <FiCheck className="w-4 h-4" />
+                        Approved
+                      </button>
+                    ) : [
+                        'pending',
+                        'changes_requested',
+                      ].includes(
+                        application.clientApprovalStatus
+                      ) ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setApprovalError('');
+                          setIsApproveModalOpen(
+                            true
+                          );
+                        }}
+                        className="px-5 py-2.5 rounded-xl bg-[#1E50C3] text-white text-sm font-semibold hover:bg-[#1A45A7] transition-all active:scale-[0.98]"
+                      >
+                        Approve Application
+                      </button>
+                    ) : null}
 
-            {/* ── Divider between info and PDFs ── */}
-            <hr className="border-gray-100 my-6" />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setShowFeedback(true)
+                      }
+                      className="px-5 py-2.5 rounded-xl border border-[#1E50C3] text-[#1E50C3] text-sm font-semibold hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
+                    >
+                      Send Feedback
+                    </button>
+                  </>
+                )}
+              </div>
 
-            {/* ── PDF Thumbnails ── */}
-            {/* Backend: GET /api/applications/:id/documents */}
-            {/* Returns: [{ name, type, url }] — render download links */}
-            <div className="flex gap-5">
-              {[
-                app.resumeName || 'No resume attached',
-                app.coverLetterName || 'No cover letter attached',
-              ].map((label) => (
-                <div key={label} className="flex flex-col items-center gap-2 cursor-pointer group">
-                  {/* PDF Icon thumbnail */}
-                  <div className="w-[100px] sm:w-[120px] h-[120px] sm:h-[140px] bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col items-center justify-center relative overflow-hidden group-hover:shadow-md transition-shadow">
-                    {/* Red PDF badge */}
-                    <div className="absolute top-3 left-3 bg-red-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-sm shadow">
-                      PDF
-                    </div>
-                    {/* Page lines decoration */}
-                    <div className="mt-10 w-16 flex flex-col gap-1.5">
-                      <div className="h-1 bg-gray-100 rounded" />
-                      <div className="h-1 bg-gray-100 rounded" />
-                      <div className="h-1 bg-gray-100 rounded w-3/4" />
-                    </div>
-                    {/* Folded corner */}
-                    <div
-                      className="absolute bottom-0 right-0 w-8 h-8 bg-gray-100"
-                      style={{ clipPath: 'polygon(100% 0, 100% 100%, 0 100%)' }}
-                    />
+              <hr className="border-gray-100 dark:border-gray-700 my-6" />
+
+              <div>
+                <h2 className="text-sm font-bold text-gray-900 dark:text-white mb-4">
+                  Documents
+                </h2>
+
+                {hasDocuments ? (
+                  <div className="flex gap-5 flex-wrap">
+                    {application.resumeName && (
+                      <DocumentCard
+                        name={
+                          application.resumeName
+                        }
+                        label="Submitted Resume.pdf"
+                      />
+                    )}
+
+                    {application.coverLetterName && (
+                      <DocumentCard
+                        name={
+                          application.coverLetterName
+                        }
+                        label="Submitted Cover Letter.pdf"
+                      />
+                    )}
                   </div>
-                  <span className="text-xs text-gray-600 font-medium text-center">{label}</span>
-                </div>
-              ))}
+                ) : (
+                  <div className="border border-dashed border-gray-200 dark:border-gray-700 rounded-xl py-10 text-center">
+                    <p className="text-sm text-gray-400 dark:text-gray-500">
+                      No documents available.
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
 
-          {/* ═══════════════════════════════════════════════════════════════════
-           *  JOB DETAILS SECTION
-           *  Backend: jobDetails array from GET /api/applications/:id
-           * ═══════════════════════════════════════════════════════════════════ */}
-          <div className="mb-6">
-            <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-4">
-              Job Details
-            </h3>
-            <ul className="space-y-2">
-              {app.jobDetails.map((item, i) => (
-                <li key={i} className="flex gap-2 text-sm text-gray-600">
-                  <span className="text-gray-400 flex-shrink-0">•</span>
-                  {item}
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          {/* ═══════════════════════════════════════════════════════════════════
-           *  QUALITIES AND CHARACTERISTICS
-           *  Backend: qualities array from GET /api/applications/:id
-           * ═══════════════════════════════════════════════════════════════════ */}
-          <div className="mb-6">
-            <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-4">
-              Qualities and Characteristics
-            </h3>
-            <ul className="space-y-2">
-              {app.qualities.map((item, i) => (
-                <li key={i} className="flex gap-2 text-sm text-gray-600">
-                  <span className="text-gray-400 flex-shrink-0">•</span>
-                  {item}
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          {/* ═══════════════════════════════════════════════════════════════════
-           *  OTHER DETAILS
-           *  Backend: otherDetails array from GET /api/applications/:id
-           * ═══════════════════════════════════════════════════════════════════ */}
-          <div className="mb-6">
-            <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-4">
-              Other Details
-            </h3>
-            <ul className="space-y-2">
-              {app.otherDetails.map((item, i) => (
-                <li key={i} className="flex gap-2 text-sm text-gray-600">
-                  <span className="text-gray-400 flex-shrink-0">•</span>
-                  {item}
-                </li>
-              ))}
-            </ul>
+            {showFeedback && (
+              <FeedbackPanel
+                messages={messages}
+                onClose={() =>
+                  setShowFeedback(false)
+                }
+                onSend={
+                  handleSendFeedback
+                }
+                readOnly={
+                  isClientPreview
+                }
+              />
+            )}
           </div>
         </div>
-
-
-
-        {/* ── Approve Modal ── */}
-        {/* Backend: PUT /api/applications/:id/approve */}
-        <ApproveModal
-          isOpen={isApproveModalOpen}
-          onClose={() => setIsApproveModalOpen(false)}
-          onConfirm={() => {
-            // TODO(Backend): Map to PUT /api/applications/${router.query.id}/approve
-            // Security: Validate auth token, check user permissions
-            console.log('Application approved!');
-          }}
-        />
       </DashboardLayout>
+
+      <ApproveModal
+        isOpen={isApproveModalOpen}
+        onClose={() => {
+          if (!isApproving) {
+            setApprovalError('');
+            setIsApproveModalOpen(false);
+          }
+        }}
+        onConfirm={
+          handleApproveApplication
+        }
+        isSubmitting={isApproving}
+        error={approvalError}
+      />
     </>
   );
 }
