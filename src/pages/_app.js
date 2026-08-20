@@ -1,13 +1,25 @@
 import '../styles/globals.css';
 import { useRouter } from 'next/router';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { AuthProvider, useAuth } from '../shared/context/AuthContext';
 import AppProvider from '../shared/context/AppProvider';
-import { getRoleHome } from '../shared/config/roles';
+import { createClient } from '../lib/supabase/client';
+import { getRoleHome, USER_ROLES } from '../shared/config/roles';
 
 const AuthWrapper = ({ children }) => {
   const router = useRouter();
   const { isAuthenticated, isLoading, user } = useAuth();
+  const [clientWorkspaceReady, setClientWorkspaceReady] =
+    useState(false);
+
+  const shouldCheckClientOnboarding =
+    !isLoading &&
+    router.isReady &&
+    isAuthenticated &&
+    user?.role === USER_ROLES.USER_CLIENT &&
+    router.pathname !== '/onboarding' &&
+    router.pathname !== '/' &&
+    !router.pathname.startsWith('/auth/');
 
   useEffect(() => {
     if (isLoading || !router.isReady) return;
@@ -40,7 +52,67 @@ const AuthWrapper = ({ children }) => {
     user?.role,
   ]);
 
-  if (isLoading) {
+  useEffect(() => {
+    if (!shouldCheckClientOnboarding) {
+      setClientWorkspaceReady(false);
+      return undefined;
+    }
+
+    let active = true;
+
+    const checkClientOnboarding = async () => {
+      setClientWorkspaceReady(false);
+
+      try {
+        const supabase = createClient();
+
+        const { data, error } = await supabase
+          .from('client_onboarding_forms')
+          .select('status')
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+        if (!active) return;
+
+        if (
+          error ||
+          data?.status !== 'submitted'
+        ) {
+          await router.replace('/onboarding');
+          return;
+        }
+
+        setClientWorkspaceReady(true);
+      } catch (checkError) {
+        if (!active) return;
+
+        console.error(
+          'Unable to verify client onboarding:',
+          checkError
+        );
+
+        await router.replace('/onboarding');
+      }
+    };
+
+    checkClientOnboarding();
+
+    return () => {
+      active = false;
+    };
+  }, [
+    router.pathname,
+    shouldCheckClientOnboarding,
+    user?.id,
+  ]);
+
+  if (
+    isLoading ||
+    (
+      shouldCheckClientOnboarding &&
+      !clientWorkspaceReady
+    )
+  ) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
         <div className="flex flex-col items-center gap-4">
